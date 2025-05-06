@@ -1,54 +1,31 @@
-from .node import Node, Data
-
-
-class RepoData(Data):
-    __slots__ = ("type", "size", "perm", "mtime", "hash", "root_name")
-
-    def is_dir(self):
-        return self.type == 0x4000
-
-    def is_file(self):
-        return self.type & 0x8000 != 0
-
-    def is_symlink(self):
-        return self.type == 0xA000
-
-    def new_node(self, name="", parent: Node = None):
-        node = RepoNode(name, parent)
-        node.data = self
-
-
-class GHDirData(RepoData):
-    def __init__(self):
-        self.type = 0x4000
-        self.size = None
-        self.perm = 0
-        self.mode = 0x4000
+from .node import Node, Aux
 
 
 class RepoNode(Node):
-    def __init__(self, name="", parent: Node = None):
-        self.name = name
-        self.parent = parent
+    __slots__ = (
+        "type",
+        "size",
+        "perm",
+        "mtime",
+        "hash",
+    )  # type: tuple[int, int, int, int, str]
 
     def is_dir(self):
-        # return self._aux.is_dir(self)
-        return self.data.is_dir()
+        return self.aux.is_dir(self)
 
     def is_file(self):
-        return self.data.is_file()
+        return self.aux.is_file(self)
 
     def is_symlink(self):
-        return self.data.is_symlink()
+        return self.aux.is_symlink(self)
 
     def iter_sort(self, file_mode=False, emptyDir=None):
         # print("iter_sort e", self.get_path())
         for node in self:
             name = node.name
-            data = node.data
-            kind = data.type
-            perm = data.perm
-            yield (name + "/" if 0x4000 == kind else name, name, kind, perm, node)
+            kind = node.type
+            perm = node.perm
+            yield name + "/" if 0x4000 == kind else name, name, kind, perm, node
 
     def calc_hash_tree(self, file_mode=False, skip_empty=True):
         # debug("calc_hash_tree %r", self)
@@ -66,40 +43,48 @@ class RepoNode(Node):
                 checksum = unhexlify(checksum)
             elif 0xE000 == kind:
                 mode = b"160000 "
-                # checksum = unhexlify(sub.data.calc_hash_blob())
-                checksum = unhexlify(sub.data.hash)
+                checksum = unhexlify(sub.hash)
             elif 0xA000 == kind:
                 mode = b"120000 "
-                # checksum = unhexlify(sub.data.calc_hash_syml())
-                checksum = unhexlify(sub.data.hash)
+                checksum = unhexlify(sub.hash)
             elif file_mode and (perm & 0b001001001) != 0:
                 mode = b"100755 "
-                # checksum = unhexlify(sub.data.calc_hash_blob())
-                checksum = unhexlify(sub.data.hash)
+                checksum = unhexlify(sub.hash)
             else:
                 mode = b"100644 "
-                # checksum = unhexlify(sub.data.calc_hash_blob())
-                checksum = unhexlify(sub.data.hash)
+                checksum = unhexlify(sub.hash)
             content.append(mode + name.encode("UTF-8") + b"\x00" + checksum)
         content = b"".join(content)
         content = b"tree " + str(len(content)).encode() + b"\x00" + content
-        self.data.size = len(content)
+        self.size = len(content)
         m = sha1()
         m.update(content)
         return m.hexdigest()
 
+    def calc_hash_symlink_target(self, content: str):
+        content = content.encode("UTF-8")
+        self.size = size = len(content)
+        m = sha1()
+        m.update(b"blob ")
+        m.update(str(size).encode())
+        m.update(b"\x00")
+        m.update(content)
+        return m.hexdigest()
+
     def get_hash(self):
-        data = self.data
-        if data.is_dir():
+        aux = self.aux
+        if aux.is_dir(self):
             try:
-                h = data.hash
+                h = self.hash
             except AttributeError:
                 h = None
+            except NotImplementedError:
+                h = None
             if not h:
-                data.hash = h = self.calc_hash_tree()
+                self.hash = h = self.calc_hash_tree()
             return h
         else:
-            return data.hash
+            return aux.get_hash(self)
 
     def get_sub_dir(self, name, *names):
         sub = self.get_name(name)
@@ -122,7 +107,19 @@ class RepoNode(Node):
         return sub
 
     def __repr__(self):
-        return "%s(%r)" % (self.__class__.__name__, self.data)
+        return "%s(%r)" % (self.__class__.__name__, self.aux)
+
+
+class RepoAux(Aux):
+
+    def is_dir(self, node: RepoNode):
+        return node.type == 0x4000
+
+    def is_file(self, node: RepoNode):
+        return node.type & 0x8000 != 0
+
+    def is_symlink(self, node: RepoNode):
+        return node.type == 0xA000
 
 
 from binascii import unhexlify

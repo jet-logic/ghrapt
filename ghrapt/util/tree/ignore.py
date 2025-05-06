@@ -1,4 +1,5 @@
 from logging import info, debug
+from pathlib import Path
 import re
 
 
@@ -227,83 +228,7 @@ class GitIgnore:
                 yield self.parse_line(line, base)
 
 
-def hook_ignore(node, data=None):
-    if data is None:
-        data = node.data
-    _ignore = getattr(data, "_ignore", None)
-    if _ignore is None:
-        _ignore = data._ignore = False
-        igno = data._path / ".gitignore"
-        excludes = includes = None
-        gi = GitIgnore()
-        if igno.is_file():
-            # debug(".gitignore %r", igno)
-            # base = "/".join(node.enum_names())
-            with igno.open("r") as h:
-                for neg, re, dirOnly, pattern in gi.parse(h):
-                    # debug(
-                    #     "%s%s <%s>",
-                    #     neg and "in" or "ex",
-                    #     dirOnly and "d" or "p",
-                    #     re.pattern,
-                    # )
-                    if neg:
-                        includes = FilterRel(re, dirOnly, includes, pattern)
-                    else:
-                        excludes = FilterRel(re, dirOnly, excludes, pattern)
-        gitd = data._path / ".git"
-        if gitd.is_dir():
-            (neg, re, dirOnly, pattern) = gi.parse_line("/.git/")
-            excludes = FilterRel(re, dirOnly, excludes, pattern)
-
-        if excludes or includes:
-            _ignore = data._ignore = (excludes, includes)
-            debug("IGF %r %s", igno, _ignore)
-
-    (*ignores,) = filter(
-        lambda v: bool(v[0]),
-        map(
-            (lambda n: (getattr(n.data, "_ignore", None), n)),
-            node.enum_self_and_parents(),
-        ),
-    )
-    # debug("ignores %r", ignores)
-
-    if ignores:
-
-        def fun(sub):
-
-            # path = sub.data._path
-            data = sub.data
-            suffix = data.is_dir() and "/" or ""
-            for (x, _), n in ignores:
-                rel = "/".join(reversed(list(sub.enum_rel_names(n))))
-
-                debug("X %r %r", rel, n)
-                while x:  # each excludes unit in the filter
-                    if x.matches(data, rel):
-                        for (_, y), n in ignores:
-                            rel2 = "/".join(reversed(list(sub.enum_rel_names(n))))
-                            # rel = "/".join(sub.enum_rel_names(n))
-                            while y:  # each includes unit in the filter
-                                if y.matches(data, rel2):
-                                    # debug(
-                                    #     "INC %s%s %s",
-                                    #     data,
-                                    #     suffix,
-                                    #     y,
-                                    # )
-                                    return False
-                                y = y.next
-                        debug("EXC %r %s%s", x, rel, suffix)
-                        return True
-                    x = x.next
-            # debug("PAS %r %r", sub, ignores)
-
-        return fun
-
-
-def collect_ignore(path):
+def collect_ignore(path: Path):
     excludes = includes = None
 
     while path and path.name:
